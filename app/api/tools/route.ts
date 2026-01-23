@@ -1,30 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { exec } from 'child_process';
-import { promisify } from 'util';
-import { readdir, stat, writeFile, mkdir } from 'fs/promises';
-import { join } from 'path';
-
-const execAsync = promisify(exec);
-
-// 获取 results 文件夹路径
-const getResultsPath = () => {
-  return join(process.cwd(), 'results');
-};
-
-// 确保 results 文件夹存在
-async function ensureResultsDir() {
-  const resultsPath = getResultsPath();
-  try {
-    await mkdir(resultsPath, { recursive: true });
-  } catch (error: any) {
-    if (error.code !== 'EEXIST') {
-      console.error('创建 results 文件夹失败:', error);
-    }
-  }
-}
 
 // 将对象中的函数转换为可序列化的格式
-function serializeFunctions(obj: any): any {
+function serializeFunctions(obj: unknown): unknown {
   if (obj === null || obj === undefined) {
     return obj;
   }
@@ -41,10 +18,11 @@ function serializeFunctions(obj: any): any {
   }
   
   if (typeof obj === 'object') {
-    const serialized: any = {};
-    for (const key in obj) {
-      if (Object.prototype.hasOwnProperty.call(obj, key)) {
-        serialized[key] = serializeFunctions(obj[key]);
+    const serialized: Record<string, unknown> = {};
+    const objRecord = obj as Record<string, unknown>;
+    for (const key in objRecord) {
+      if (Object.prototype.hasOwnProperty.call(objRecord, key)) {
+        serialized[key] = serializeFunctions(objRecord[key]);
       }
     }
     return serialized;
@@ -53,98 +31,92 @@ function serializeFunctions(obj: any): any {
   return obj;
 }
 
-// 保存结果到文件
-async function saveResult(toolName: string, args: any, result: any): Promise<string> {
-  await ensureResultsDir();
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const filename = `${toolName}_${timestamp}.json`;
-  const filePath = join(getResultsPath(), filename);
-
-  const dataToSave = {
-    toolName,
-    args,
-    result,
-    timestamp: new Date().toISOString(),
-  };
-
-  await writeFile(filePath, JSON.stringify(serializeFunctions(dataToSave), null, 2), 'utf-8');
-  return filename;
+// 分析货量数据并生成文本报告
+function analyzeVolumeData(data: unknown): string {
+  let analysis = '## 货量数据分析\n\n';
+  
+  // 根据实际数据结构进行分析
+  // 这里需要根据实际返回的 JSON 结构来调整
+  if (data && typeof data === 'object') {
+    // 尝试提取关键信息
+    if (Array.isArray(data)) {
+      analysis += '### 数据概览\n\n';
+      analysis += `共获取 ${data.length} 条数据记录。\n\n`;
+    } else {
+      const dataObj = data as Record<string, unknown>;
+      const keys = Object.keys(dataObj);
+      
+      if (keys.length > 0) {
+        analysis += '### 数据概览\n\n';
+        
+        // 尝试提取数值字段
+        const numericFields = keys.filter(key => {
+          const value = dataObj[key];
+          return typeof value === 'number' || (typeof value === 'string' && !isNaN(Number(value)));
+        });
+        
+        if (numericFields.length > 0) {
+          analysis += '**关键指标：**\n\n';
+          numericFields.forEach(field => {
+            const value = dataObj[field];
+            analysis += `- ${field}: ${value}\n`;
+          });
+          analysis += '\n';
+        }
+        
+        // 如果有其他结构化数据
+        if (dataObj.summary || dataObj.total || dataObj.count) {
+          analysis += '### 汇总信息\n\n';
+          if (dataObj.summary) analysis += `汇总: ${JSON.stringify(dataObj.summary)}\n\n`;
+          if (dataObj.total) analysis += `总计: ${dataObj.total}\n\n`;
+          if (dataObj.count) analysis += `数量: ${dataObj.count}\n\n`;
+        }
+      } else {
+        analysis += '数据为空或格式异常。\n\n';
+      }
+    }
+  } else {
+    analysis += '无法解析数据格式。\n\n';
+  }
+  
+  return analysis;
 }
+
 
 // GET: 获取工具列表
 export async function GET() {
-  return NextResponse.json({
-    tools: [
-      {
-        name: 'hello',
-        description: '一个简单的问候工具，向指定的人打招呼',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            name: {
-              type: 'string',
-              description: '要问候的人的名字',
-            },
-          },
-          required: ['name'],
-        },
-      },
-      {
-        name: 'get_current_time',
-        description: '获取当前时间',
-        inputSchema: {
-          type: 'object',
-          properties: {},
-        },
-      },
-      {
-        name: 'clean_trash',
-        description: '清理电脑上的垃圾桶（macOS）',
-        inputSchema: {
-          type: 'object',
-          properties: {},
-        },
-      },
-      {
-        name: 'list_directory',
-        description: `查看指定文件夹下的项目和文件列表。
+  return NextResponse.json(
+    {
+      tools: [
+        {
+          name: 'analyze_volume',
+          description: '查询货量数据。返回货量汇总信息和原始数据，AI 可以根据数据自行分析和生成图表。',
+          inputSchema: {
+            type: 'object',
+            properties: {}
+          }
+        }
+      ]
+    },
+    {
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type',
+      }
+    }
+  );
+}
 
-数据字段说明：
-- name: 文件/文件夹名称（字符串类型）
-- type: 类型（分类字段，值为"文件夹"或"文件"）
-- size: 文件大小（数值字段，单位KB/MB，仅文件有值，文件夹为"-"）
-- modified: 修改时间（日期时间字段，格式：YYYY/M/D H:mm:ss）
-
-可视化建议：
-1. type字段 → 饼图（pie chart）
-   - 用途：展示文件夹和文件的数量分布
-   - 分组：文件夹、文件
-   - 聚合方式：count（计数）
-   
-2. size字段 → 柱状图（bar chart）
-   - 用途：展示文件大小分布
-   - 数据范围：仅统计type为"文件"且size不为"-"的项
-   - 分箱范围：
-     * 0-1 KB
-     * 1-10 KB
-     * 10-100 KB
-     * 100 KB-1 MB
-     * >1 MB
-   - 聚合方式：histogram（直方图）
-
-前端应该根据返回的items数据自动生成这些图表。`,
-        inputSchema: {
-          type: 'object',
-          properties: {
-            path: {
-              type: 'string',
-              description: '要查看的文件夹路径',
-            },
-          },
-          required: ['path'],
-        },
-      },
-    ],
+// OPTIONS: 处理 CORS 预检请求
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 200,
+    headers: {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+    },
   });
 }
 
@@ -152,231 +124,167 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { toolName, args } = body;
+    const { toolName } = body;
+
+    console.log('🔵 [MCP Tools API] 收到工具调用请求:', {
+      toolName,
+      hasBody: !!body
+    });
 
     if (!toolName) {
+      console.error('❌ [MCP Tools API] 缺少 toolName 参数');
       return NextResponse.json(
         { error: '缺少必需参数: toolName' },
-        { status: 400 }
+        { 
+          status: 400,
+          headers: {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type',
+          }
+        }
       );
     }
 
-    let result: any;
-
-    switch (toolName) {
-      case 'hello': {
-        const { name: userName } = args || {};
-        if (!userName) {
-          return NextResponse.json(
-            { error: '缺少必需参数: name' },
-            { status: 400 }
-          );
-        }
-        result = {
-          content: [
-            {
-              type: 'text',
-              text: `你好，${userName}！这是一个简单的 MCP 工具示例。`,
-            },
-          ],
-        };
-        break;
-      }
-
-      case 'get_current_time': {
-        const now = new Date();
-        result = {
-          content: [
-            {
-              type: 'text',
-              text: `当前时间是：${now.toLocaleString('zh-CN')}`,
-            },
-          ],
-        };
-        break;
-      }
-
-      case 'clean_trash': {
-        try {
-          // 在 macOS 上使用 osascript 清理垃圾桶
-          const { stdout, stderr } = await execAsync(
-            'osascript -e \'tell application "Finder" to empty trash\''
-          );
-
-          if (stderr && !stderr.includes('User cancelled')) {
-            throw new Error(`清理垃圾桶失败: ${stderr}`);
+    if (toolName !== 'analyze_volume') {
+      console.error('❌ [MCP Tools API] 未知工具:', toolName);
+      return NextResponse.json(
+        { error: `未知工具: ${toolName}` },
+        { 
+          status: 404,
+          headers: {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type',
           }
-
-          result = {
-            content: [
-              {
-                type: 'text',
-                text: '✅ 垃圾桶已成功清理！',
-              },
-            ],
-          };
-        } catch (error: any) {
-          return NextResponse.json(
-            {
-              error: `清理垃圾桶时出错: ${error.message}`,
-              content: [
-                {
-                  type: 'text',
-                  text: `❌ 清理垃圾桶时出错: ${error.message}`,
-                },
-              ],
-              isError: true,
-            },
-            { status: 500 }
-          );
         }
-        break;
-      }
-
-      case 'list_directory': {
-        try {
-          const { path: dirPath } = args || {};
-          if (!dirPath) {
-            return NextResponse.json(
-              { error: '缺少必需参数: path' },
-              { status: 400 }
-            );
-          }
-
-          // 读取目录内容
-          const entries = await readdir(dirPath);
-
-          // 获取每个条目的详细信息
-          const items = await Promise.all(
-            entries.map(async (entry) => {
-              const fullPath = join(dirPath, entry);
-              const stats = await stat(fullPath);
-              return {
-                name: entry,
-                type: stats.isDirectory() ? '文件夹' : '文件',
-                size: stats.isFile() ? `${(stats.size / 1024).toFixed(2)} KB` : '-',
-                modified: stats.mtime.toLocaleString('zh-CN'),
-              };
-            })
-          );
-
-          // 按类型排序：文件夹在前，文件在后
-          items.sort((a, b) => {
-            if (a.type === '文件夹' && b.type === '文件') return -1;
-            if (a.type === '文件' && b.type === '文件夹') return 1;
-            return a.name.localeCompare(b.name);
-          });
-
-          // 格式化输出
-          let output = `📁 目录：${dirPath}\n\n`;
-          output += `共找到 ${items.length} 个项目：\n\n`;
-
-          items.forEach((item, index) => {
-            const icon = item.type === '文件夹' ? '📂' : '📄';
-            output += `${index + 1}. ${icon} ${item.name}\n`;
-            output += `   类型: ${item.type}`;
-            if (item.type === '文件') {
-              output += ` | 大小: ${item.size}`;
-            }
-            output += ` | 修改时间: ${item.modified}\n\n`;
-          });
-
-          // 生成图表配置
-          const chartConfigs = [
-            {
-              id: 'type-distribution',
-              type: 'pie',
-              title: '📊 文件类型分布',
-              dataSource: {
-                field: 'type',
-                aggregate: 'count',
-              },
-              options: {
-                aspectRatio: 1.5,
-                legend: { position: 'bottom' },
-              },
-            },
-            {
-              id: 'size-distribution',
-              type: 'bar',
-              title: '📈 文件大小分布',
-              dataSource: {
-                field: 'size',
-                filter: {
-                  __function__: true,
-                  __source__: '(item) => item.type === "文件" && item.size !== "-"',
-                },
-                transform: {
-                  __function__: true,
-                  __source__: '(sizeStr) => { const match = sizeStr.match(/([\\d.]+)\\s*(KB|MB)/); if (match) { const value = parseFloat(match[1]); return match[2] === "MB" ? value * 1024 : value; } return 0; }',
-                },
-                bins: [
-                  { label: '0-1 KB', min: 0, max: 1 },
-                  { label: '1-10 KB', min: 1, max: 10 },
-                  { label: '10-100 KB', min: 10, max: 100 },
-                  { label: '100 KB-1 MB', min: 100, max: 1024 },
-                  { label: '>1 MB', min: 1024, max: Infinity },
-                ],
-              },
-              options: {
-                aspectRatio: 2,
-                legend: { display: false },
-              },
-            },
-          ];
-
-          result = {
-            content: [
-              {
-                type: 'text',
-                text: output,
-              },
-            ],
-            items, // 结构化数据
-            chartConfigs, // 图表配置
-          };
-        } catch (error: any) {
-          return NextResponse.json(
-            {
-              error: `读取目录时出错: ${error.message}`,
-              content: [
-                {
-                  type: 'text',
-                  text: `❌ 读取目录时出错: ${error.message}`,
-                },
-              ],
-              isError: true,
-            },
-            { status: 500 }
-          );
-        }
-        break;
-      }
-
-      default:
-        return NextResponse.json(
-          { error: `未知工具: ${toolName}` },
-          { status: 404 }
-        );
+      );
     }
 
-    // 保存结果到文件
+    console.log('✅ [MCP Tools API] 开始执行 analyze_volume 工具...');
+
+    // 调用外部接口获取货量数据
     try {
-      const savedFilename = await saveResult(toolName, args, result);
-      result.savedFile = savedFilename;
-      result.savedPath = join('results', savedFilename);
-    } catch (saveError: any) {
-      console.error('保存结果失败:', saveError);
-      // 即使保存失败，也返回结果
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30秒超时
+
+      const response = await fetch('http://10.45.35.254/captain/app/volume/portal/summarize', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authoritytoken': 'c2a4a96d-b15d-4e89-a312-6475035e1b03'
+        },
+        body: JSON.stringify({
+          type: 'ORG',
+          volumeBusinessType: 'ALL',
+          volumeType: 'PRECISION'
+        }),
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        throw new Error(`接口调用失败: ${response.status} ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      console.log('📊 [MCP Tools API] 获取到外部接口数据:', {
+        hasData: !!data,
+        dataKeys: data && typeof data === 'object' ? Object.keys(data).slice(0, 10) : []
+      });
+
+      // 分析数据并生成文本报告
+      const analysis = analyzeVolumeData(data);
+      
+      // 将原始数据也包含在返回中，供 AI 分析使用
+      const dataSummary = JSON.stringify(data, null, 2);
+
+      // 构建返回结果 - 只返回文本分析，不返回图表配置
+      const result = {
+        content: [
+          {
+            type: 'text',
+            text: `${analysis}\n\n**原始数据：**\n\`\`\`json\n${dataSummary}\n\`\`\``
+          }
+        ]
+      };
+
+      console.log('✅ [MCP Tools API] 工具执行完成，返回结果:', {
+        hasContent: !!result.content,
+        contentLength: result.content[0]?.text?.length || 0
+      });
+
+      // 序列化函数后返回
+      const serializedResult = serializeFunctions(result);
+      return NextResponse.json(serializedResult, {
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type',
+        }
+      });
+
+    } catch (error: unknown) {
+      // 处理网络错误、超时等
+      const err = error as { name?: string; message?: string };
+      if (err.name === 'AbortError') {
+        return NextResponse.json(
+          {
+            error: '请求超时，请稍后重试',
+            content: [
+              {
+                type: 'text',
+                text: '❌ 获取货量数据超时，请稍后重试。'
+              }
+            ],
+            isError: true
+          },
+          { 
+            status: 408,
+            headers: {
+              'Access-Control-Allow-Origin': '*',
+              'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+              'Access-Control-Allow-Headers': 'Content-Type',
+            }
+          }
+        );
+      }
+
+      return NextResponse.json(
+        {
+          error: `获取货量数据失败: ${err.message || '未知错误'}`,
+          content: [
+            {
+              type: 'text',
+              text: `❌ 获取货量数据失败: ${err.message || '未知错误'}`
+            }
+          ],
+          isError: true
+        },
+        { 
+          status: 500,
+          headers: {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type',
+          }
+        }
+      );
     }
 
-    // 序列化函数后返回
-    const serializedResult = serializeFunctions(result);
-    return NextResponse.json(serializedResult);
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const err = error as { message?: string };
     return NextResponse.json(
-      { error: error.message },
-      { status: 500 }
+      { error: err.message || '服务器错误' },
+      { 
+        status: 500,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type',
+        }
+      }
     );
   }
 }
